@@ -1,19 +1,27 @@
+import pandas as pd
+from gensim.models import Word2Vec
+from sklearn.metrics.pairwise import cosine_similarity
+from preproccessing import preprocess_text
+from grammar import correct_text
 from data import df
+import numpy as np
 
 # Инициализация DataFrame для сохранения фильтров
 filtered_df = df.copy()
 
+# Импорт модели
+model = Word2Vec.load(r"..\..\ingredients.model")
+
 ingredient_filters = []
 category_filters = []
 kitchen_filters = []
-
 
 def apply_filters():
     global filtered_df, ingredient_filters, category_filters, kitchen_filters
 
     # Применение сохраненных фильтров
     if ingredient_filters:
-        filters = filtered_df['ingredients'].apply(lambda x: all(ingredient.lower() in x.lower() for ingredient in ingredient_filters))
+        filters = filtered_df['ingredients'].apply(lambda x: all(ingredient in x for ingredient in ingredient_filters))
         filtered_df = filtered_df[filters]
 
     if category_filters:
@@ -24,24 +32,51 @@ def apply_filters():
         filters = filtered_df['kitchen'].str.lower().isin(kitchen_filters)
         filtered_df = filtered_df[filters]
 
-
 def search_by_ingredient():
-    global filtered_df, ingredient_filters, category_filters, kitchen_filters  # Используем глобальные переменные
+    global filtered_df, model
 
-    # Сброс данных
-    filtered_df = df.copy()
+    ingredients_input = correct_text(input("Введите список ингредиентов через запятую: "))
 
-    ingredients_input = input("Введите ингредиенты через запятую: ")
-    ingredients_list = [ingredient.strip() for ingredient in ingredients_input.split(",")]
+    # Препроцессинг введенных ингредиентов
+    ingredients_list = preprocess_text(ingredients_input)
 
-    # Сохранение новых фильтров по ингредиентам
-    ingredient_filters = ingredients_list
+    # Векторизация
+    ingredients_vector = sum([model.wv[token] for token in ingredients_list if token in model.wv]) / len(
+        ingredients_list)
+
+    print(ingredients_vector, type(ingredients_vector))
+
+    # Вычисление степени схожести введенного текста с моделью
+    model_vectors = [
+        sum([model.wv[token] for token in ingredients.split(', ') if token in model.wv]) / len(ingredients.split(', '))
+        for ingredients in filtered_df['ingredients']
+    ]
+
+    # Вычисление степени схожести
+    similarities = [np.dot(ingredients_vector, model_vector) / (np.linalg.norm(ingredients_vector) * np.linalg.norm(model_vector))
+                    for model_vector in model_vectors]
+
+    # Сортировка результата по схожести
+    sorted_indices = np.argsort(similarities)[::-1]
+
+    seen_recipes = set()
+    count = 0
+
+    search_results_df = pd.DataFrame(columns=filtered_df.columns)
+
+    for idx in sorted_indices:
+        if filtered_df['food'].iloc[idx] not in seen_recipes:
+            new_row = filtered_df.iloc[idx:idx + 1]  # Extract the row as a DataFrame
+            search_results_df = pd.concat([search_results_df, new_row], ignore_index=True)
+
+            seen_recipes.add(filtered_df['food'].iloc[idx])
+            count += 1
 
     # Применение сохраненных фильтров перед выводом
     apply_filters()
 
     # Вывод результатов
-    print_results(filtered_df)
+    print_results(search_results_df)
 
 
 def search_by_category():
@@ -61,7 +96,6 @@ def search_by_category():
 
     # Вывод результатов
     print_results(filtered_df)
-
 
 def search_by_kitchen():
     global filtered_df, ingredient_filters, category_filters, kitchen_filters
@@ -103,7 +137,7 @@ def print_results(result_df):
         # Ограничение вывода до 30 строк
         limited_df = unique_df.head(30)
         for _, row in limited_df.iterrows():
-            print(f"{row['food']} — {row['ingredients']} — {row['category']} — {row['kitchen']} — {row['food_url']}")
+            print(f"{row['food'].capitalize()} — {row['ingredients'].capitalize()} — {row['category'].capitalize()} — {row['kitchen'].capitalize()} — {row['food_url'].capitalize()}")
     else:
         print("Нет подходящих результатов.")
 
